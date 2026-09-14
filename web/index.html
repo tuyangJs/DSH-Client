@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DSH Client · 初始化</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+    background: #0f1216; color: #e6e8ea;
+    min-height: 100vh; display: flex; align-items: center; justify-content: center;
+    padding: 24px;
+  }
+  .card {
+    width: 100%; max-width: 460px;
+    background: #171b21; border: 1px solid #262c35; border-radius: 14px;
+    padding: 32px 30px;
+  }
+  .logo { width: 44px; height: 44px; margin-bottom: 16px; }
+  h1 { font-size: 19px; font-weight: 650; margin-bottom: 6px; }
+  .desc { font-size: 13px; color: #9aa3ad; line-height: 1.6; margin-bottom: 22px; }
+  .desc b { color: #cdd3d9; font-weight: 600; }
+  .label { font-size: 12px; font-weight: 600; color: #8b949e; letter-spacing: .04em; margin-bottom: 10px; }
+  .source { display: flex; flex-direction: column; gap: 8px; margin-bottom: 22px; }
+  .source label {
+    display: flex; align-items: center; gap: 10px;
+    border: 1px solid #2a313b; border-radius: 10px;
+    padding: 11px 14px; cursor: pointer; transition: border-color .15s, background .15s;
+    font-size: 13px;
+  }
+  .source label:hover { border-color: #3a4450; }
+  .source input[type=radio] { accent-color: #10a37f; width: 15px; height: 15px; }
+  .source label.sel { border-color: #10a37f; background: rgba(16,163,127,.08); }
+  .source .tag { margin-left: auto; font-size: 11px; color: #10a37f; }
+  .source .tag.gray { color: #7d868f; }
+  #custom-wrap { display: none; margin-top: 4px; }
+  #custom-wrap.show { display: block; }
+  #custom-reg {
+    width: 100%; background: #0f1216; color: #e6e8ea;
+    border: 1px solid #2a313b; border-radius: 8px;
+    padding: 9px 12px; font-size: 13px; outline: none;
+  }
+  #custom-reg:focus { border-color: #10a37f; }
+  #install-btn {
+    width: 100%; padding: 12px; border: none; border-radius: 10px;
+    background: #10a37f; color: #fff; font-size: 14px; font-weight: 650;
+    cursor: pointer; transition: background .15s;
+  }
+  #install-btn:hover { background: #0e8f6e; }
+  #install-btn:disabled { background: #2a313b; color: #7d868f; cursor: not-allowed; }
+  .hidden { display: none !important; }
+
+  /* Node 缺失警告 */
+  #node-warn {
+    margin-bottom: 20px; font-size: 12.5px; color: #e8c07a; line-height: 1.7;
+    background: rgba(232,192,122,.07); border: 1px solid rgba(232,192,122,.3);
+    border-radius: 10px; padding: 12px 14px;
+  }
+  #node-warn b { color: #f0d096; }
+  #node-warn .dl-link {
+    color: #10a37f; text-decoration: none; font-weight: 600; border-bottom: 1px dashed #10a37f;
+  }
+  #node-warn .dl-link:hover { color: #14c795; }
+  #node-warn code {
+    background: rgba(0,0,0,.35); border-radius: 4px; padding: 1px 5px;
+    font-size: 11.5px; color: #d8dee4;
+  }
+  #recheck-btn {
+    margin-top: 10px; padding: 7px 14px; border-radius: 8px;
+    background: transparent; border: 1px solid #e8c07a; color: #e8c07a;
+    font-size: 12px; font-weight: 600; cursor: pointer;
+  }
+  #recheck-btn:hover { background: rgba(232,192,122,.12); }
+
+  /* 进度 */
+  #progress { text-align: center; padding: 8px 0 4px; }
+  .ring-wrap { position: relative; width: 108px; height: 108px; margin: 8px auto 14px; }
+  .ring-wrap svg { transform: rotate(-90deg); }
+  #ring-bg { stroke: #262c35; }
+  #ring { stroke: #10a37f; stroke-linecap: round; transition: stroke-dashoffset .4s ease; }
+  #pct {
+    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    font-size: 21px; font-weight: 700; color: #e6e8ea;
+  }
+  #phase { font-size: 13px; color: #9aa3ad; min-height: 20px; }
+  #err {
+    margin-top: 14px; font-size: 12px; color: #ff7a70; line-height: 1.6;
+    background: rgba(255,122,112,.08); border: 1px solid rgba(255,122,112,.25);
+    border-radius: 8px; padding: 10px 12px; text-align: left;
+    word-break: break-all; white-space: pre-wrap; max-height: 160px; overflow: auto;
+  }
+  #retry-btn {
+    margin-top: 14px; width: 100%; padding: 11px; border-radius: 10px;
+    background: transparent; border: 1px solid #10a37f; color: #10a37f;
+    font-size: 13px; font-weight: 600; cursor: pointer;
+  }
+  #retry-btn:hover { background: rgba(16,163,127,.1); }
+  .done-ico { font-size: 40px; color: #10a37f; margin-bottom: 10px; }
+  #done-tip { font-size: 13px; color: #9aa3ad; }
+  #done-tip b { color: #10a37f; }
+  .spin {
+    display: inline-block; width: 12px; height: 12px; border-radius: 50%;
+    border: 2px solid #3a4450; border-top-color: #10a37f;
+    animation: rot .8s linear infinite; vertical-align: -2px; margin-right: 6px;
+  }
+  @keyframes rot { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<div class="card">
+  <svg class="logo" viewBox="0 0 44 44" fill="none">
+    <rect x="2" y="2" width="40" height="40" rx="11" fill="#10a37f"/>
+    <path d="M13 15h18M13 22h13M13 29h8" stroke="#fff" stroke-width="3.4" stroke-linecap="round"/>
+  </svg>
+
+  <!-- 选择页 -->
+  <div id="page-pick">
+    <h1>安装 DeepSeek Harness</h1>
+    <p class="desc">首次运行需要下载 DSH 后端（约 <b>120 MB</b>，含 Node 依赖）。请选择 npm 下载源：</p>
+
+    <div id="node-warn" class="hidden">
+      <b>未检测到 Node.js 运行时</b> —— DSH 后端需要 Node.js 才能运行，请先完成以下任一步骤：
+      <div style="margin-top:8px;">
+        方案 A（便携，推荐）：到 <a class="dl-link" href="https://nodejs.org/en/download" target="_blank">nodejs.org 下载页</a>
+        下载 Windows 版 zip 压缩包，解压后把 <code>node.exe</code> 和 <code>node_modules</code>、<code>npm</code> 等整个内容
+        放入客户端目录的 <code>runtime\</code> 子目录；
+      </div>
+      <div style="margin-top:6px;">
+        方案 B：安装系统级 Node.js（同一下载页的 .msi 安装器），装完后回到本页重试。
+      </div>
+      <button id="recheck-btn">我已就绪，重新检测</button>
+    </div>
+    <div class="label">NPM 源</div>
+    <div class="source" id="sources">
+      <label class="sel"><input type="radio" name="reg" value="https://registry.npmmirror.com" checked>
+        npmmirror（淘宝镜像）<span class="tag">国内推荐</span></label>
+      <label><input type="radio" name="reg" value="https://registry.npmjs.org">
+        npmjs（官方源）<span class="tag gray">国际网络</span></label>
+      <label><input type="radio" name="reg" value="custom">
+        自定义源<span class="tag gray">私有源</span></label>
+      <div id="custom-wrap">
+        <input id="custom-reg" type="text" placeholder="https://your-registry.example.com" spellcheck="false">
+      </div>
+    </div>
+    <button id="install-btn">下载并安装</button>
+  </div>
+
+  <!-- 进度页 -->
+  <div id="page-progress" class="hidden">
+    <div id="progress">
+      <div class="ring-wrap">
+        <svg width="108" height="108" viewBox="0 0 108 108">
+          <circle id="ring-bg" cx="54" cy="54" r="46" fill="none" stroke-width="7"/>
+          <circle id="ring" cx="54" cy="54" r="46" fill="none" stroke-width="7"
+                  stroke-dasharray="289.03" stroke-dashoffset="289.03"/>
+        </svg>
+        <div id="pct">0%</div>
+      </div>
+      <div id="phase"><span class="spin"></span>正在清理残留…</div>
+      <div id="err" class="hidden"></div>
+      <button id="retry-btn" class="hidden">重试</button>
+    </div>
+  </div>
+
+  <!-- 完成页 -->
+  <div id="page-done" class="hidden" style="text-align:center;">
+    <div class="done-ico">&#10003;</div>
+    <h1>安装完成</h1>
+    <p class="desc" id="done-tip">DeepSeek Harness <b id="done-ver"></b> 已就绪，正在重启客户端…</p>
+  </div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+  var RING_LEN = 289.03;  // 2πr, r=46
+  var $ = function (id) { return document.getElementById(id); };
+  var busy = false;
+
+  // ---- Node.js 运行时检测 ----
+  function applyNodeStatus(ok) {
+    $("node-warn").classList.toggle("hidden", ok);
+    var btn = $("install-btn");
+    btn.disabled = !ok;
+    btn.title = ok ? "" : "请先按上方说明安装 Node.js";
+  }
+  applyNodeStatus(new URLSearchParams(location.search).get("node") !== "0");
+  // Python 侧重新检测结果：window.__dshNodeStatus(1|0)
+  window.__dshNodeStatus = function (ok) {
+    applyNodeStatus(ok === 1 || ok === "1");
+    if (ok == 1 || ok === "1") {
+      $("recheck-btn").textContent = "检测通过 ✓";
+    }
+  };
+  $("recheck-btn").addEventListener("click", function () {
+    try {
+      if (typeof jade !== "undefined" && jade.invoke) {
+        var p = jade.invoke("recheckNode", "{}");
+        if (p && p.catch) p.catch(function () {});
+      } else if (window.jade && window.jade.ipcSend) {
+        window.jade.ipcSend("recheckNode", "{}");
+      }
+    } catch (e) { /* 静默 */ }
+  });
+
+  function selRadio() {
+    var list = document.querySelectorAll('input[name=reg]');
+    for (var i = 0; i < list.length; i++) if (list[i].checked) return list[i];
+    return list[0];
+  }
+  function currentRegistry() {
+    var r = selRadio();
+    if (r.value === "custom") return $("custom-reg").value.trim();
+    return r.value;
+  }
+  function markSel() {
+    var list = document.querySelectorAll('#sources label');
+    for (var i = 0; i < list.length; i++) {
+      var input = list[i].querySelector("input");
+      list[i].classList.toggle("sel", input.checked);
+    }
+    $("custom-wrap").classList.toggle("show", selRadio().value === "custom");
+  }
+  document.getElementById("sources").addEventListener("change", markSel);
+
+  function show(page) {
+    $("page-pick").classList.toggle("hidden", page !== "pick");
+    $("page-progress").classList.toggle("hidden", page !== "progress");
+    $("page-done").classList.toggle("hidden", page !== "done");
+  }
+  function setRing(pct) {
+    $("ring").setAttribute("stroke-dashoffset", String(RING_LEN * (1 - pct / 100)));
+    $("pct").textContent = Math.round(pct) + "%";
+  }
+  function phase(text, spin) {
+    $("phase").innerHTML = (spin ? '<span class="spin"></span>' : "") + text;
+  }
+  function fail(msg) {
+    phase("安装失败", false);
+    var e = $("err");
+    e.textContent = msg;
+    e.classList.remove("hidden");
+    $("retry-btn").classList.remove("hidden");
+    busy = false;
+  }
+
+  // Python 侧推送：window.__dshInstallUpdate({pct, phase, error, version})
+  window.__dshInstallUpdate = function (data) {
+    data = data || {};
+    if (data.error) { fail(data.error); return; }
+    if (typeof data.pct === "number") setRing(data.pct);
+    if (data.phase === "install") phase("正在下载并解压依赖（大包较慢，请耐心等待）…", true);
+    else if (data.phase === "done") {
+      setRing(100);
+      phase("安装完成，正在重启…", true);
+      if (data.version) $("done-ver").textContent = "v" + data.version;
+      setTimeout(function () { show("done"); }, 600);
+    } else if (data.phase === "prepare") phase("正在清理残留…", true);
+    else if (typeof data.text === "string") phase(data.text, true);
+  };
+
+  function invokeInstall() {
+    if (busy) return;
+    var reg = currentRegistry();
+    if (!/^https?:\/\/.+/.test(reg)) {
+      alert("请输入合法的 registry 地址（以 http(s):// 开头）");
+      return;
+    }
+    busy = true;
+    show("progress");
+    setRing(0);
+    phase("正在准备…", true);
+    $("err").classList.add("hidden");
+    $("retry-btn").classList.add("hidden");
+    try {
+      if (typeof jade !== "undefined" && jade.invoke) {
+        var p = jade.invoke("startInstall", JSON.stringify({ registry: reg }));
+        if (p && p.catch) p.catch(function (e) { fail("IPC 调用失败: " + e); });
+      } else if (window.jade && window.jade.ipcSend) {
+        window.jade.ipcSend("startInstall", JSON.stringify({ registry: reg }));
+      } else {
+        fail("当前 WebView 未注入 jade IPC 通道，无法启动安装。");
+      }
+    } catch (e) {
+      fail("启动安装失败: " + e);
+    }
+  }
+  $("install-btn").addEventListener("click", invokeInstall);
+  $("retry-btn").addEventListener("click", function () { show("pick"); });
+})();
+</script>
+</body>
+</html>

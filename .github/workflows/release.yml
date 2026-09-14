@@ -1,0 +1,215 @@
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version (e.g. 1.0.0 or 1.0.0-beta)'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      build_no: ${{ steps.buildno.outputs.build_no }}
+      version: ${{ steps.buildno.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate build number
+        id: buildno
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # 编译号 = 本月本仓库已创建的 Release 数 + 1，格式 YY + 月字母(A-L) + NN。
+          # 以 Release 列表自身作为持久状态，避免"Actions 缓存按 ref 隔离 →
+          # 不同 tag 的发布互相看不到上一个计数 → 编号每次重置"的问题。
+          $now = (Get-Date).ToUniversalTime()
+          $year = $now.ToString("yy")
+          $monthLetter = [char](64 + $now.Month)   # 1->A ... 12->L
+          $ymPrefix = $now.ToString("yyyy-MM")      # 例如 2026-09
+
+          $count = 0
+          $created = gh api --paginate "repos/$($env:GITHUB_REPOSITORY)/releases" --jq '.[].created_at'
+          if ($LASTEXITCODE -eq 0 -and $created) {
+            $count = ($created | Where-Object { $_ -like "$ymPrefix*" } | Measure-Object).Count
+          } else {
+            Write-Host "WARN: 无法获取 Release 列表 (exit=$LASTEXITCODE)，本月按 0 起算"
+          }
+
+          $next = $count + 1
+          if ($next -ge 100) { $next = 99 }   # NN 两位封顶
+
+          $buildNo = "{0}{1}{2}" -f $year, $monthLetter, $next.ToString("00")
+          echo "build_no=$buildNo" >> $env:GITHUB_OUTPUT
+
+          $version = "${{ github.event.inputs.version }}"
+          if (-not $version) {
+            $version = "${{ github.ref_name }}" -replace '^v',''
+          }
+          echo "version=$version" >> $env:GITHUB_OUTPUT
+          Write-Host "Build number: $buildNo (本月已存在 $count 个 Release), Version: $version"
+
+      # 预先在同仓库创建草稿 Release：构建产物直接上传到草稿，
+      # 彻底绕开 Actions artifacts 存储配额（按账户计算且重算有延迟）。
+      - name: Ensure draft release exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          $version = "${{ steps.buildno.outputs.version }}"
+          gh release create "v$version" --draft --title "v$version" --notes "Build in progress..."
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host "Created draft release v$version"
+          } else {
+            Write-Host "Release v$version not created (likely already exists), continuing"
+          }
+
+  build:
+    needs: prepare
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # runtime/ 需要完整便携版 Node（node.exe + node_modules/npm/bin/npm-cli.js，
+      # 供客户端安装向导与 DSH 自动更新使用）。setup-node 缓存的正是官方便携版，
+      # 直接复制整目录即可，无需手工写死下载版本号。
+      - name: Prepare bundled Node runtime
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Bundle Node into runtime/
+        shell: pwsh
+        run: |
+          $nodeDir = Split-Path (Get-Command node).Source   # .../node/22.x.x/x64（官方便携版完整结构）
+          if (-not (Test-Path "runtime")) { New-Item -ItemType Directory -Path "runtime" | Out-Null }
+          Copy-Item "$nodeDir/*" "runtime" -Recurse -Force
+          if (Test-Path "runtime/node_modules/npm/bin/npm-cli.js") {
+            Write-Host "runtime/ ready (node.exe + npm-cli.js)"
+          } else {
+            Write-Host "ERROR: npm-cli.js missing from bundled runtime" -ForegroundColor Red
+            exit 1
+          }
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install build tools
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          # Nuitka 4.0rc7：JadeUI 官方文档指定的版本，修复 onefile 缺 vcruntime140.dll 的问题
+          pip install https://github.com/HG-ha/jadeui/raw/main/scripts/nuitka-4.0.rc7.zip
+          pip install jadeui[dev]
+
+      - name: Build with Nuitka
+        shell: pwsh
+        run: |
+          curl -sL -o build.py https://raw.githubusercontent.com/HG-ha/Jadeui/main/scripts/build.py
+          python build.py main.py --output DSHClient --no-onefile `
+            --icon assets/favicon.ico `
+            --include-data-dir web=web `
+            --include-data-dir runtime=runtime `
+            --include-data-dir assets=assets `
+            --include-data-dir preset=preset
+          if (-not (Test-Path "dist/DSHClient/DSHClient.exe")) { Write-Host "ERROR: build output missing"; exit 1 }
+
+      - name: Create zip
+        shell: pwsh
+        run: |
+          $version = "${{ needs.prepare.outputs.version }}"
+          $buildNo = "${{ needs.prepare.outputs.build_no }}"
+          $zipName = "DSHClient_win_x64_v${version}.${buildNo}.zip"
+          Compress-Archive -Path "dist/DSHClient/*" -DestinationPath $zipName -Force
+          Write-Host "Created: $zipName ($((Get-Item $zipName).Length / 1MB) MB)"
+
+      # 直接把 zip 上传到草稿 Release，不再经过 Actions artifacts（无存储配额限制）。
+      # --clobber 支持重跑时覆盖同名资产。
+      - name: Upload package to draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          $version = "${{ needs.prepare.outputs.version }}"
+          $buildNo = "${{ needs.prepare.outputs.build_no }}"
+          $zipName = "DSHClient_win_x64_v${version}.${buildNo}.zip"
+          gh release upload "v$version" $zipName --clobber
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Write-Host "Uploaded $zipName to release v$version"
+
+  release:
+    needs: [build, prepare]
+    runs-on: ubuntu-latest
+    steps:
+      # 完整历史 + 全部 tag：生成 change log 时要取"自上个 tag 以来的提交"
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Extract changelog
+        id: changelog
+        run: |
+          VERSION="${{ needs.prepare.outputs.version }}"
+          # 首选大版本更新日志 docs/更新日志-v<主.次>.md（存在时）；否则回退为
+          # 自上个 tag 以来的提交列表，保证开源仓库发版时 Notes 始终有内容。
+          MAJOR_MINOR=$(echo "$VERSION" | sed 's/\.[0-9]*$//')
+          CHANGELOG_FILE="docs/更新日志-v${MAJOR_MINOR}.md"
+          if [ ! -f "$CHANGELOG_FILE" ]; then
+            CHANGELOG_FILE=$(ls docs/更新日志-*.md 2>/dev/null | sort -r | head -1)
+          fi
+          if [ -f "$CHANGELOG_FILE" ]; then
+            BODY=$(sed '/^#/d' "$CHANGELOG_FILE" | sed -e '/./,$!d' -e :a -e '/^\n*$/{$d;N;ba}')
+          else
+            LAST_TAG=$(git describe --tags --abbrev=0 "${{ github.ref_name }}"^ 2>/dev/null || echo "")
+            if [ -n "$LAST_TAG" ]; then
+              BODY=$(git log --oneline --no-merges "$LAST_TAG..${{ github.ref_name }}" | head -50)
+            else
+              BODY=$(git log --oneline --no-merges -20)
+            fi
+          fi
+          BODY_PATH="$RUNNER_TEMP/release_body.md"
+          printf '%s\n' "$BODY" > "$BODY_PATH"
+          echo "body_path=$BODY_PATH" >> $GITHUB_OUTPUT
+
+      - name: Determine prerelease flag
+        id: prerelease
+        run: |
+          VERSION="${{ needs.prepare.outputs.version }}"
+          if echo "$VERSION" | grep -q '-'; then
+            echo "is_prerelease=true" >> $GITHUB_OUTPUT
+            echo "make_latest=false" >> $GITHUB_OUTPUT
+          else
+            echo "is_prerelease=false" >> $GITHUB_OUTPUT
+            echo "make_latest=true" >> $GITHUB_OUTPUT
+          fi
+
+      # 发布草稿：设置标题与更新日志、prerelease/latest 标记，并转为正式 Release。
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="${{ needs.prepare.outputs.version }}"
+          BUILD_NO="${{ needs.prepare.outputs.build_no }}"
+          TITLE="v${VERSION} (Build ${BUILD_NO})"
+          if [ "${{ steps.prerelease.outputs.is_prerelease }}" = "true" ]; then
+            gh release edit "v${VERSION}" \
+              --title "$TITLE" \
+              --notes-file "${{ steps.changelog.outputs.body_path }}" \
+              --draft=false --prerelease
+          else
+            gh release edit "v${VERSION}" \
+              --title "$TITLE" \
+              --notes-file "${{ steps.changelog.outputs.body_path }}" \
+              --draft=false --latest
+          fi
